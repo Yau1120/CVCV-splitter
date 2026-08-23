@@ -1,0 +1,542 @@
+import pandas as pd
+
+
+# ============================================================
+# 1. Excel 文件路径
+# ============================================================
+
+# !!! 只需要修改这一行 !!!
+INPUT_FILE = r"C:\Users\你的用户名\Desktop\你的文件.xlsx"
+
+# 输出文件
+OUTPUT_FILE = r"C:\Users\你的用户名\Desktop\CV_三方言对应分析.xlsx"
+
+
+# ============================================================
+# 2. 三个方言的 C / V 列
+# ============================================================
+
+DIALECTS = {
+    "XX": ("XX-C", "XX-V"),
+    "MY": ("MY-C", "MY-V"),
+    "MW": ("MW-C", "MW-V")
+}
+
+
+# ============================================================
+# 3. 读取 Excel
+# ============================================================
+
+print("正在读取 Excel...")
+
+df = pd.read_excel(INPUT_FILE)
+
+print("Excel 读取成功！")
+print("数据行数：", len(df))
+print("")
+
+
+# ============================================================
+# 4. 检查列名
+# ============================================================
+
+print("Excel 中的列：")
+
+for col in df.columns:
+    print("   ", col)
+
+print("")
+
+
+for dialect, columns in DIALECTS.items():
+
+    c_col = columns[0]
+    v_col = columns[1]
+
+    if c_col not in df.columns:
+        raise ValueError(
+            "找不到 " + dialect + " 的辅音列：" + c_col
+        )
+
+    if v_col not in df.columns:
+        raise ValueError(
+            "找不到 " + dialect + " 的元音列：" + v_col
+        )
+
+
+print("XX / MY / MW 三个方言的 C/V 列全部找到。")
+print("")
+
+
+# ============================================================
+# 5. 清理数据
+# ============================================================
+
+for dialect, columns in DIALECTS.items():
+
+    c_col = columns[0]
+    v_col = columns[1]
+
+    df[c_col] = (
+        df[c_col]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    df[v_col] = (
+        df[v_col]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+
+# ============================================================
+# 6. ① 三方言 C → C 对应
+#
+# XX-C → MY-C → MW-C
+# ============================================================
+
+def calculate_three_way_C(df):
+
+    xx_c = DIALECTS["XX"][0]
+    my_c = DIALECTS["MY"][0]
+    mw_c = DIALECTS["MW"][0]
+
+    data = df[
+        [xx_c, my_c, mw_c]
+    ].copy()
+
+    # 删除缺失数据
+    data = data[
+        (data[xx_c] != "") &
+        (data[my_c] != "") &
+        (data[mw_c] != "")
+    ]
+
+    # 统计三方言组合
+    result = (
+        data
+        .groupby([xx_c, my_c, mw_c])
+        .size()
+        .reset_index(name="Count")
+    )
+
+    # 按出现次数排序
+    result = result.sort_values(
+        "Count",
+        ascending=False
+    )
+
+    # 添加百分比
+    total = result["Count"].sum()
+
+    result["Percentage"] = (
+        result["Count"] / total * 100
+    )
+
+    return result
+
+
+# ============================================================
+# 7. ② 三方言 V → V 对应
+#
+# XX-V → MY-V → MW-V
+# ============================================================
+
+def calculate_three_way_V(df):
+
+    xx_v = DIALECTS["XX"][1]
+    my_v = DIALECTS["MY"][1]
+    mw_v = DIALECTS["MW"][1]
+
+    data = df[
+        [xx_v, my_v, mw_v]
+    ].copy()
+
+    data = data[
+        (data[xx_v] != "") &
+        (data[my_v] != "") &
+        (data[mw_v] != "")
+    ]
+
+    result = (
+        data
+        .groupby([xx_v, my_v, mw_v])
+        .size()
+        .reset_index(name="Count")
+    )
+
+    result = result.sort_values(
+        "Count",
+        ascending=False
+    )
+
+    total = result["Count"].sum()
+
+    result["Percentage"] = (
+        result["Count"] / total * 100
+    )
+
+    return result
+
+
+# ============================================================
+# 8. ③ 三方言 CV → CV → CV 对应
+#
+# XX-CV → MY-CV → MW-CV
+# ============================================================
+
+def calculate_three_way_CV(df):
+
+    xx_c = DIALECTS["XX"][0]
+    xx_v = DIALECTS["XX"][1]
+
+    my_c = DIALECTS["MY"][0]
+    my_v = DIALECTS["MY"][1]
+
+    mw_c = DIALECTS["MW"][0]
+    mw_v = DIALECTS["MW"][1]
+
+    data = df[
+        [
+            xx_c,
+            xx_v,
+            my_c,
+            my_v,
+            mw_c,
+            mw_v
+        ]
+    ].copy()
+
+    # 删除任何一个 C/V 缺失的词
+    data = data[
+        (data[xx_c] != "") &
+        (data[xx_v] != "") &
+        (data[my_c] != "") &
+        (data[my_v] != "") &
+        (data[mw_c] != "") &
+        (data[mw_v] != "")
+    ]
+
+    # 构造 CV
+    data["XX-CV"] = (
+        data[xx_c] + "+" + data[xx_v]
+    )
+
+    data["MY-CV"] = (
+        data[my_c] + "+" + data[my_v]
+    )
+
+    data["MW-CV"] = (
+        data[mw_c] + "+" + data[mw_v]
+    )
+
+    # 三方言 CV 联合统计
+    result = (
+        data
+        .groupby(
+            ["XX-CV", "MY-CV", "MW-CV"]
+        )
+        .size()
+        .reset_index(name="Count")
+    )
+
+    result = result.sort_values(
+        "Count",
+        ascending=False
+    )
+
+    total = result["Count"].sum()
+
+    result["Percentage"] = (
+        result["Count"] / total * 100
+    )
+
+    return result
+
+
+# ============================================================
+# 9. 元音分类
+#
+# !!! 这是暂时的分类。
+# 后面最好根据你的实际元音系统调整。
+# ============================================================
+
+FRONT_VOWELS = {
+    "i",
+    "e",
+    "ɛ",
+    "æ",
+    "y",
+    "ø"
+}
+
+CENTRAL_VOWELS = {
+    "ə",
+    "ɘ",
+    "ɤ"
+}
+
+BACK_VOWELS = {
+    "a",
+    "ɑ",
+    "o",
+    "ɔ",
+    "u"
+}
+
+
+def vowel_group(v):
+
+    if v in FRONT_VOWELS:
+        return "Front"
+
+    if v in CENTRAL_VOWELS:
+        return "Central"
+
+    if v in BACK_VOWELS:
+        return "Back"
+
+    return "Unknown"
+
+
+# ============================================================
+# 10. ④ C 对 V 的偏好
+#
+# 分别计算：
+#
+# XX：C × Front/Central/Back
+# MY：C × Front/Central/Back
+# MW：C × Front/Central/Back
+# ============================================================
+
+def calculate_CV_preference(df, dialect):
+
+    c_col = DIALECTS[dialect][0]
+    v_col = DIALECTS[dialect][1]
+
+    data = df[
+        [c_col, v_col]
+    ].copy()
+
+    data = data[
+        (data[c_col] != "") &
+        (data[v_col] != "")
+    ]
+
+    # 给每个元音分类
+    data["V_Group"] = (
+        data[v_col].apply(vowel_group)
+    )
+
+    # C × V_group
+    result = (
+        data
+        .groupby(
+            [c_col, "V_Group"]
+        )
+        .size()
+        .reset_index(name="Count")
+    )
+
+    # 每个辅音的总数
+    total = (
+        result
+        .groupby(c_col)["Count"]
+        .transform("sum")
+    )
+
+    # 条件比例：
+    #
+    # P(V_group | C)
+    #
+    result["Percentage"] = (
+        result["Count"] / total * 100
+    )
+
+    result["Dialect"] = dialect
+
+    result = result[
+        [
+            "Dialect",
+            c_col,
+            "V_Group",
+            "Count",
+            "Percentage"
+        ]
+    ]
+
+    return result
+
+
+# ============================================================
+# 11. 执行三方言 C / V / CV 统计
+# ============================================================
+
+print("开始计算三方言对应...")
+print("")
+
+
+print("① C → C → C")
+
+C_result = calculate_three_way_C(df)
+
+print(
+    "得到",
+    len(C_result),
+    "种 C 三联对应"
+)
+
+print("")
+
+
+print("② V → V → V")
+
+V_result = calculate_three_way_V(df)
+
+print(
+    "得到",
+    len(V_result),
+    "种 V 三联对应"
+)
+
+print("")
+
+
+print("③ CV → CV → CV")
+
+CV_result = calculate_three_way_CV(df)
+
+print(
+    "得到",
+    len(CV_result),
+    "种 CV 三联对应"
+)
+
+print("")
+
+
+# ============================================================
+# 12. 计算三个方言的 C-V 偏好
+# ============================================================
+
+print("④ C-V 偏好")
+
+preference_results = []
+
+for dialect in DIALECTS:
+
+    print(
+        "正在计算：",
+        dialect
+    )
+
+    temp = calculate_CV_preference(
+        df,
+        dialect
+    )
+
+    preference_results.append(temp)
+
+
+Preference_result = pd.concat(
+    preference_results,
+    ignore_index=True
+)
+
+
+# ============================================================
+# 13. 高频 CV 三方言对应
+#
+# 默认：
+# 出现 ≥ 3 次
+#
+# 你以后可以改成 5、10 等。
+# ============================================================
+
+MIN_COUNT = 3
+
+High_frequency_CV = CV_result[
+    CV_result["Count"] >= MIN_COUNT
+].copy()
+
+High_frequency_CV = (
+    High_frequency_CV
+    .sort_values(
+        "Count",
+        ascending=False
+    )
+)
+
+
+# ============================================================
+# 14. 输出 Excel
+# ============================================================
+
+print("")
+print("正在生成结果 Excel...")
+
+
+with pd.ExcelWriter(
+    OUTPUT_FILE,
+    engine="openpyxl"
+) as writer:
+
+    # ① C
+    C_result.to_excel(
+        writer,
+        sheet_name="01_C三方言对应",
+        index=False
+    )
+
+    # ② V
+    V_result.to_excel(
+        writer,
+        sheet_name="02_V三方言对应",
+        index=False
+    )
+
+    # ③ CV
+    CV_result.to_excel(
+        writer,
+        sheet_name="03_CV三方言对应",
+        index=False
+    )
+
+    # ④ C-V preference
+    Preference_result.to_excel(
+        writer,
+        sheet_name="04_CV偏好",
+        index=False
+    )
+
+    # ⑤ 高频 CV
+    High_frequency_CV.to_excel(
+        writer,
+        sheet_name="05_高频CV对应",
+        index=False
+    )
+
+
+# ============================================================
+# 15. 完成
+# ============================================================
+
+print("")
+print("============================================")
+print("分析完成！")
+print("============================================")
+print("")
+print("输出文件：")
+print(OUTPUT_FILE)
+print("")
+
+print("结果包括：")
+print("01_C三方言对应")
+print("02_V三方言对应")
+print("03_CV三方言对应")
+print("04_CV偏好")
+print("05_高频CV对应")
+print("")
