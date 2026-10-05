@@ -1,0 +1,450 @@
+import os
+from docx import Document
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
+
+
+# ============================================================
+# 1. 文件路径
+# ============================================================
+
+TEXTGRID_FOLDER = r"E:\PhoTon\Data_wav\Zhimulin\Locuteur1-Zelaxue"
+
+WORD_FILE = r"C:\Users\Yao\Desktop\audio and transcription\third field trip\ultrasound wordlist\Zhimulin\ultrasound_Zhimulin_final.docx"
+
+OUTPUT_EXCEL = r"C:\Users\Yao\Desktop\audio and transcription\third field trip\ultrasound wordlist\Zhimulin\result.xlsx"
+
+
+# ============================================================
+# 2. 检查文件和文件夹
+# ============================================================
+
+print("=" * 60)
+print("开始检查文件...")
+print("=" * 60)
+
+if not os.path.exists(TEXTGRID_FOLDER):
+    raise FileNotFoundError(
+        f"\n找不到 TextGrid 文件夹：\n{TEXTGRID_FOLDER}"
+    )
+
+if not os.path.isdir(TEXTGRID_FOLDER):
+    raise NotADirectoryError(
+        f"\n这个路径不是文件夹：\n{TEXTGRID_FOLDER}"
+    )
+
+if not os.path.exists(WORD_FILE):
+    raise FileNotFoundError(
+        f"\n找不到 Word 文件：\n{WORD_FILE}\n\n"
+        f"请确认文件名和路径是否完全正确。"
+    )
+
+print("✓ TextGrid 文件夹存在")
+print("✓ Word 文件存在")
+
+
+# ============================================================
+# 3. 读取 Word 文档
+# ============================================================
+
+print("\n正在读取 Word 文档...")
+
+doc = Document(WORD_FILE)
+
+if len(doc.tables) == 0:
+    raise ValueError(
+        "\nWord 文档中没有找到任何表格！"
+    )
+
+print(f"✓ 找到 {len(doc.tables)} 个表格")
+
+
+# ============================================================
+# 4. 找到包含目标列的表格
+# ============================================================
+
+required_columns = [
+    "Gloss English",
+    "Zhimulin",
+    "C2",
+    "C1",
+    "V"
+]
+
+target_table = None
+headers = None
+
+for table_number, table in enumerate(doc.tables, start=1):
+
+    if len(table.rows) == 0:
+        continue
+
+    current_headers = [
+        cell.text.strip()
+        for cell in table.rows[0].cells
+    ]
+
+    print(f"\n检查第 {table_number} 个表格：")
+    print(current_headers)
+
+    # 判断这个表格是不是我们要找的表格
+    if all(col in current_headers for col in required_columns):
+        target_table = table
+        headers = current_headers
+        print("✓ 找到目标表格！")
+        break
+
+
+if target_table is None:
+
+    print("\nWord 中没有找到包含以下列的表格：")
+
+    for col in required_columns:
+        print("  -", col)
+
+    print("\n实际找到的表头可能存在空格或拼写差异。")
+
+    raise ValueError(
+        "\n无法找到包含 Gloss English / Zhimulin / C2 / C1 / V 的表格。"
+    )
+
+
+# ============================================================
+# 5. 找到各列的位置
+# ============================================================
+
+column_indices = {}
+
+for col in required_columns:
+    column_indices[col] = headers.index(col)
+
+print("\n列的位置：")
+
+for col, index in column_indices.items():
+    print(f"  {col}: 第 {index + 1} 列")
+
+
+# ============================================================
+# 6. 建立 Gloss English → Zhimulin/C2/C1/V 的对应关系
+# ============================================================
+
+print("\n正在读取 Word 表格内容...")
+
+word_data = {}
+
+duplicate_words = []
+
+for row_number, row in enumerate(target_table.rows[1:], start=2):
+
+    cells = [
+        cell.text.strip()
+        for cell in row.cells
+    ]
+
+    # 防止某些行列数不够
+    if len(cells) <= max(column_indices.values()):
+        print(
+            f"⚠ 第 {row_number} 行列数不足，跳过"
+        )
+        continue
+
+    gloss_english = cells[
+        column_indices["Gloss English"]
+    ].strip()
+
+    if not gloss_english:
+        continue
+
+    # 不区分大小写
+    key = gloss_english.lower()
+
+    data = {
+        "Zhimulin": cells[
+            column_indices["Zhimulin"]
+        ].strip(),
+
+        "C2": cells[
+            column_indices["C2"]
+        ].strip(),
+
+        "C1": cells[
+            column_indices["C1"]
+        ].strip(),
+
+        "V": cells[
+            column_indices["V"]
+        ].strip()
+    }
+
+    # 检查重复的 Gloss English
+    if key in word_data:
+        duplicate_words.append(gloss_english)
+
+    word_data[key] = data
+
+
+print(f"✓ 成功读取 {len(word_data)} 个英文词")
+
+
+if duplicate_words:
+
+    print("\n⚠ 注意：发现重复的 Gloss English：")
+
+    for word in duplicate_words:
+        print("  -", word)
+
+    print(
+        "\n同一个词出现多次时，目前代码会使用 Word 表格中"
+        "最后一次出现的数据。"
+    )
+
+
+# ============================================================
+# 7. 从 TextGrid 文件名中提取词
+# ============================================================
+
+def extract_word(filename):
+
+    """
+    例如：
+
+    File394_Track02-thick.TextGrid
+
+    → thick
+
+
+    如果是：
+
+    File394_Track02-very-thick.TextGrid
+
+    → very-thick
+    """
+
+    # 去掉 .TextGrid
+    name = os.path.splitext(filename)[0]
+
+    # 如果没有 -
+    if "-" not in name:
+        return None
+
+    # 取最后一个 - 后面的内容
+    word = name.rsplit("-", 1)[1].strip()
+
+    if not word:
+        return None
+
+    return word
+
+
+# ============================================================
+# 8. 创建 Excel
+# ============================================================
+
+print("\n正在创建 Excel...")
+
+wb = Workbook()
+
+ws = wb.active
+ws.title = "TextGrid Data"
+
+
+# Excel 表头
+headers_excel = [
+    "TextGrid文件名",
+    "Zhimulin",
+    "C2",
+    "C1",
+    "V"
+]
+
+ws.append(headers_excel)
+
+
+# 表头格式
+for cell in ws[1]:
+
+    cell.font = Font(bold=True)
+
+    cell.alignment = Alignment(
+        horizontal="center",
+        vertical="center"
+    )
+
+
+# ============================================================
+# 9. 遍历 TextGrid 文件
+# ============================================================
+
+matched = 0
+unmatched = 0
+invalid_filename = 0
+
+unmatched_list = []
+
+textgrid_files = [
+    f
+    for f in os.listdir(TEXTGRID_FOLDER)
+    if f.lower().endswith(".textgrid")
+]
+
+textgrid_files.sort()
+
+print(f"\n找到 {len(textgrid_files)} 个 TextGrid 文件")
+print("\n开始匹配：")
+print("-" * 60)
+
+
+for filename in textgrid_files:
+
+    # 提取词
+    word = extract_word(filename)
+
+    # 文件名格式不正确
+    if word is None:
+
+        print(
+            f"⚠ 无法从文件名提取词：{filename}"
+        )
+
+        ws.append([
+            filename,
+            "",
+            "",
+            "",
+            ""
+        ])
+
+        invalid_filename += 1
+
+        continue
+
+
+    # 不区分大小写
+    key = word.lower()
+
+
+    # ========================================================
+    # 找到匹配
+    # ========================================================
+
+    if key in word_data:
+
+        data = word_data[key]
+
+        ws.append([
+            filename,
+            data["Zhimulin"],
+            data["C2"],
+            data["C1"],
+            data["V"]
+        ])
+
+        print(
+            f"✓ {filename}"
+            f"  →  {word}"
+        )
+
+        matched += 1
+
+
+    # ========================================================
+    # 没有找到匹配
+    # ========================================================
+
+    else:
+
+        ws.append([
+            filename,
+            "",
+            "",
+            "",
+            ""
+        ])
+
+        print(
+            f"✗ 未找到：{filename}"
+            f"  →  {word}"
+        )
+
+        unmatched += 1
+
+        unmatched_list.append(
+            (filename, word)
+        )
+
+
+# ============================================================
+# 10. 调整 Excel 格式
+# ============================================================
+
+ws.column_dimensions["A"].width = 45
+ws.column_dimensions["B"].width = 25
+ws.column_dimensions["C"].width = 15
+ws.column_dimensions["D"].width = 15
+ws.column_dimensions["E"].width = 15
+
+
+# 自动换行
+for row in ws.iter_rows():
+
+    for cell in row:
+
+        cell.alignment = Alignment(
+            vertical="center",
+            wrap_text=True
+        )
+
+
+# 冻结第一行
+ws.freeze_panes = "A2"
+
+
+# ============================================================
+# 11. 保存 Excel
+# ============================================================
+
+print("\n正在保存 Excel...")
+
+wb.save(OUTPUT_EXCEL)
+
+
+# ============================================================
+# 12. 输出最终结果
+# ============================================================
+
+print("\n")
+print("=" * 60)
+print("处理完成！")
+print("=" * 60)
+
+print(f"TextGrid 总数：{len(textgrid_files)}")
+print(f"成功匹配：{matched}")
+print(f"未匹配：{unmatched}")
+print(f"文件名格式异常：{invalid_filename}")
+
+print("\nExcel 文件：")
+print(OUTPUT_EXCEL)
+
+
+# ============================================================
+# 13. 输出未匹配列表
+# ============================================================
+
+if unmatched_list:
+
+    print("\n" + "=" * 60)
+    print("以下 TextGrid 没有在 Gloss English 中找到：")
+    print("=" * 60)
+
+    for filename, word in unmatched_list:
+
+        print(
+            f"{filename}  →  {word}"
+        )
+
+else:
+
+    print("\n✓ 所有 TextGrid 都成功匹配！")
+
+
+print("\n程序结束。")
