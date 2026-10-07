@@ -1,0 +1,123 @@
+from docx import Document
+from pathlib import Path
+
+
+# =========================
+# 1. 文件路径
+# =========================
+
+file_path = Path(
+    r"C:\Users\Yao\Desktop\papers\Xiaoxing Qiang Description\CV组配.docx"
+)
+
+output_path = file_path.parent / "CV集合结果.txt"
+
+
+# =========================
+# 2. 读取 Word
+# =========================
+
+doc = Document(file_path)
+
+if not doc.tables:
+    raise ValueError("Word 文件中没有找到表格！")
+
+table = doc.tables[0]
+
+
+# =========================
+# 3. 读取表头：元音
+# =========================
+
+vowels = [
+    cell.text.strip()
+    for cell in table.rows[0].cells[1:]
+]
+
+print("识别到的元音：")
+print(vowels)
+
+
+# =========================
+# 4. 建立两个方向的集合
+# =========================
+
+# 辅音 → 元音
+consonant_sets = {}
+
+# 元音 → 辅音
+vowel_sets = {
+    vowel: []
+    for vowel in vowels
+}
+
+
+# =========================
+# 5. 读取每一个辅音
+# =========================
+
+for row in table.rows[1:]:
+
+    consonant = row.cells[0].text.strip()
+
+    # 跳过空行
+    if not consonant:
+        continue
+
+    matched_vowels = []
+
+    for vowel, cell in zip(vowels, row.cells[1:]):
+
+        mark = cell.text.strip()
+
+        # 只有 + 才认为可以组配
+        if mark == "+":
+            matched_vowels.append(vowel)
+
+            # 同时建立 元音 → 辅音
+            vowel_sets[vowel].append(consonant)
+
+    consonant_sets[consonant] = matched_vowels
+
+
+# =========================
+# 6. 输出结果
+# =========================
+
+lines = []
+
+lines.append("========== 辅音 → 元音 ==========\n")
+
+for consonant, vowels_list in consonant_sets.items():
+
+    content = ", ".join(vowels_list)
+
+    line = f"C{consonant} = {{{content}}}"
+
+    print(line)
+    lines.append(line)
+
+
+lines.append("\n========== 元音 → 辅音 ==========\n")
+
+for vowel, consonants_list in vowel_sets.items():
+
+    content = ", ".join(consonants_list)
+
+    line = f"C{vowel} = {{{content}}}"
+
+    print(line)
+    lines.append(line)
+
+
+# =========================
+# 7. 保存结果
+# =========================
+
+output_path.write_text(
+    "\n".join(lines),
+    encoding="utf-8"
+)
+
+print("\n处理完成！")
+print(f"结果已经保存到：\n{output_path}")
