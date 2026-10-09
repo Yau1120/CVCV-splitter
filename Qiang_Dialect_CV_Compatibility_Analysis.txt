@@ -1,0 +1,441 @@
+
+from pathlib import Path
+from collections import defaultdict
+from itertools import combinations
+import re
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.cell.rich_text import CellRichText, TextBlock
+from openpyxl.cell.text import InlineFont
+from openpyxl.utils import get_column_letter
+
+
+# ==========================================================
+# 1. 路径、方言及颜色
+# ==========================================================
+
+folder = Path(
+    r"C:\Users\Yao\Desktop\audio and transcription\方言语音对比"
+)
+
+files = {
+    "JS": folder / "CV集合结果_JS.txt",
+    "ZML": folder / "CV集合结果_ZML.txt",
+    "XX": folder / "CV集合结果_XX.txt",
+    "MY": folder / "CV集合结果_MY.txt",
+}
+
+output_file = folder / "羌语四方言_CV组配总表.xlsx"
+
+colors = {
+    "JS": "2563EB",    # 蓝色
+    "ZML": "DC2626",   # 红色
+    "XX": "16A34A",    # 绿色
+    "MY": "7C3AED",    # 紫色
+}
+
+# 通用格式
+header_fill = PatternFill("solid", fgColor="E8EDF3")
+thin_side = Side(style="thin", color="D1D5DB")
+cell_border = Border(
+    left=thin_side,
+    right=thin_side,
+    top=thin_side,
+    bottom=thin_side,
+)
+center = Alignment(horizontal="center", vertical="center")
+
+
+# ==========================================================
+# 2. 读取并解析 TXT
+# ==========================================================
+
+def parse_file(filepath):
+    """
+    读取两个部分：
+    辅音 -> 元音，例如 Cp = {i, e, ə, u, a}
+    元音 -> 辅音，例如 Ci = {p, pʰ, b, ...}
+
+    返回两个 CV 组合集合及音素顺序。
+    """
+    text = filepath.read_text(encoding="utf-8-sig")
+
+    forward = defaultdict(set)
+    reverse = defaultdict(set)
+
+    consonants = []
+    vowels = []
+    section = None
+
+    for line in text.splitlines():
+        line = line.strip()
+
+        if not line:
+            continue
+
+        # 根据标题判断当前部分
+        if "辅音" in line and "元音" in line and "→" in line:
+            if line.index("辅音") < line.index("元音"):
+                section = "forward"
+            else:
+                section = "reverse"
+            continue
+
+        match = re.match(r"^C(.+?)\s*=\s*\{(.*?)\}", line)
+
+        if not match:
+            continue
+
+        symbol = match.group(1).strip()
+        items = [
+            item.strip()
+            for item in match.group(2).split(",")
+            if item.strip()
+        ]
+
+        if section == "forward":
+            consonant = symbol
+
+            if consonant not in consonants:
+                consonants.append(consonant)
+
+            for vowel in items:
+                if vowel not in vowels:
+                    vowels.append(vowel)
+                forward[consonant].add(vowel)
+
+        elif section == "reverse":
+            vowel = symbol
+
+            if vowel not in vowels:
+                vowels.append(vowel)
+
+            for consonant in items:
+                if consonant not in consonants:
+                    consonants.append(consonant)
+                reverse[vowel].add(consonant)
+
+    forward_pairs = {
+        (c, v)
+        for c, vowel_set in forward.items()
+        for v in vowel_set
+    }
+
+    reverse_pairs = {
+        (c, v)
+        for v, consonant_set in reverse.items()
+        for c in consonant_set
+    }
+
+    return (
+        forward_pairs,
+        reverse_pairs,
+        consonants,
+        vowels,
+    )
+
+
+# ==========================================================
+# 3. 读取四个方言并整理数据
+# ==========================================================
+
+data = {}
+all_consonants = []
+all_vowels = []
+discrepancies = []
+
+for dialect, filepath in files.items():
+    if not filepath.exists():
+        raise FileNotFoundError(
+            f"找不到文件：{filepath}\n"
+            "请检查文件名及文件夹路径。"
+        )
+
+    forward_pairs, reverse_pairs, consonants, vowels = (
+        parse_file(filepath)
+    )
+
+    # 两个方向不一致的组合
+    for c, v in sorted(forward_pairs - reverse_pairs):
+        discrepancies.append([
+            dialect, c, v, "仅出现在辅音→元音部分"
+        ])
+
+    for c, v in sorted(reverse_pairs - forward_pairs):
+        discrepancies.append([
+            dialect, c, v, "仅出现在元音→辅音部分"
+        ])
+
+    # 取并集：任一方向记录的组合均保留
+    data[dialect] = forward_pairs | reverse_pairs
+
+    for c in consonants:
+        if c not in all_consonants:
+            all_consonants.append(c)
+
+    for v in vowels:
+        if v not in all_vowels:
+            all_vowels.append(v)
+
+all_consonants = list(dict.fromkeys(all_consonants))
+all_vowels = list(dict.fromkeys(all_vowels))
+
+if not all_consonants or not all_vowels:
+    raise ValueError(
+        "没有成功读取到辅音或元音。"
+        "请检查 TXT 文件中的分节标题和 Cp = {...} 格式。"
+    )
+
+
+# ==========================================================
+# 4. 通用函数：创建 CV 矩阵
+# ==========================================================
+
+def make_rich_plus(dialects):
+    """创建同一单元格中不同颜色的 +。"""
+    rich = CellRichText()
+
+    for dialect in dialects:
+        rich.append(
+            TextBlock(
+                InlineFont(
+                    color=colors[dialect],
+                    b=True,
+                    sz=12,
+                ),
+                "+ ",
+            )
+        )
+
+    return rich
+
+
+def write_matrix(ws, dialects):
+    """
+    创建矩阵。
+    dialects 决定本表显示哪些方言。
+    """
+    ws.cell(row=1, column=1, value="辅音 \\ 元音")
+
+    # 元音表头
+    for col, vowel in enumerate(all_vowels, start=2):
+        cell = ws.cell(row=1, column=col, value=vowel)
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = center
+        cell.border = cell_border
+
+    # 左上角
+    cell = ws.cell(row=1, column=1)
+    cell.font = Font(bold=True)
+    cell.fill = header_fill
+    cell.alignment = center
+    cell.border = cell_border
+
+    # 辅音行
+    for row, consonant in enumerate(all_consonants, start=2):
+        cell = ws.cell(row=row, column=1, value=consonant)
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = center
+        cell.border = cell_border
+
+        # CV 组合
+        for col, vowel in enumerate(all_vowels, start=2):
+            cell = ws.cell(row=row, column=col)
+            cell.alignment = center
+            cell.border = cell_border
+
+            present = [
+                d for d in dialects
+                if (consonant, vowel) in data[d]
+            ]
+
+            if present:
+                cell.value = make_rich_plus(present)
+
+    # 冻结表头与辅音列
+    ws.freeze_panes = "B2"
+    ws.column_dimensions["A"].width = 17
+
+    for col in range(2, len(all_vowels) + 2):
+        ws.column_dimensions[
+            get_column_letter(col)
+        ].width = 12
+
+    for row in range(1, len(all_consonants) + 2):
+        ws.row_dimensions[row].height = 24
+
+    # 右侧图例
+    legend_col = len(all_vowels) + 3
+
+    cell = ws.cell(
+        row=1, column=legend_col, value="方言图例"
+    )
+    cell.font = Font(bold=True)
+    cell.alignment = center
+
+    for i, dialect in enumerate(dialects, start=2):
+        cell = ws.cell(
+            row=i,
+            column=legend_col,
+            value=f"+  {dialect}",
+        )
+        cell.font = Font(
+            color=colors[dialect],
+            bold=True,
+            size=12,
+        )
+        cell.alignment = center
+
+    ws.column_dimensions[
+        get_column_letter(legend_col)
+    ].width = 16
+
+
+# ==========================================================
+# 5. 创建工作簿和四方言总表
+# ==========================================================
+
+wb = Workbook()
+
+ws = wb.active
+ws.title = "CV总表"
+
+write_matrix(ws, list(files.keys()))
+
+
+# ==========================================================
+# 6. 自动生成全部六张两两对比表
+# ==========================================================
+
+for d1, d2 in combinations(files.keys(), 2):
+    ws_pair = wb.create_sheet(f"{d1} vs {d2}")
+    write_matrix(ws_pair, [d1, d2])
+
+
+# ==========================================================
+# 7. 方言统计表
+# ==========================================================
+
+stats = wb.create_sheet("方言统计")
+
+stats.append(["方言", "CV组配数量", "颜色"])
+
+for dialect in files:
+    stats.append([
+        dialect,
+        len(data[dialect]),
+        colors[dialect],
+    ])
+
+    row = stats.max_row
+    stats.cell(row=row, column=1).font = Font(
+        color=colors[dialect], bold=True
+    )
+    stats.cell(row=row, column=3).fill = PatternFill(
+        "solid", fgColor=colors[dialect]
+    )
+
+for cell in stats[1]:
+    cell.font = Font(bold=True)
+    cell.fill = header_fill
+    cell.alignment = center
+    cell.border = cell_border
+
+for row in stats.iter_rows(min_row=2, max_row=stats.max_row):
+    for cell in row:
+        cell.alignment = center
+        cell.border = cell_border
+
+common_pairs = set.intersection(
+    *(data[d] for d in files)
+)
+
+stats.append([])
+stats.append(["共有或独有组合", "数量", "说明"])
+
+stats.append([
+    "四方言共有",
+    len(common_pairs),
+    "四个方言均有的组合",
+])
+
+for dialect in files:
+    other_pairs = set.union(
+        *(data[d] for d in files if d != dialect)
+    )
+    exclusive = data[dialect] - other_pairs
+
+    stats.append([
+        f"{dialect} 独有",
+        len(exclusive),
+        f"仅 {dialect} 有的组合",
+    ])
+
+for row in range(6, stats.max_row + 1):
+    for cell in stats[row]:
+        cell.alignment = center
+        cell.border = cell_border
+
+stats.column_dimensions["A"].width = 23
+stats.column_dimensions["B"].width = 18
+stats.column_dimensions["C"].width = 28
+stats.freeze_panes = "A2"
+
+
+# ==========================================================
+# 8. 双向核对表
+# ==========================================================
+
+check = wb.create_sheet("双向核对")
+
+check.append([
+    "方言",
+    "辅音",
+    "元音",
+    "差异类型",
+])
+
+for item in discrepancies:
+    check.append(item)
+
+for cell in check[1]:
+    cell.font = Font(bold=True)
+    cell.fill = header_fill
+    cell.alignment = center
+    cell.border = cell_border
+
+for row in check.iter_rows(min_row=2):
+    for cell in row:
+        cell.alignment = center
+        cell.border = cell_border
+
+for col, width in {
+    "A": 14,
+    "B": 16,
+    "C": 16,
+    "D": 32,
+}.items():
+    check.column_dimensions[col].width = width
+
+check.freeze_panes = "A2"
+check.auto_filter.ref = check.dimensions
+
+
+# ==========================================================
+# 9. 保存 Excel
+# ==========================================================
+
+wb.save(output_file)
+
+print("=" * 50)
+print("四方言 CV 组配表已生成！")
+print(f"文件位置：{output_file}")
+print(f"辅音数量：{len(all_consonants)}")
+print(f"元音数量：{len(all_vowels)}")
+print(f"四方言共有组合：{len(common_pairs)}")
+print(f"双向核对差异数：{len(discrepancies)}")
+print("已生成 1 张四方言总表和 6 张两两对比表。")
+print("=" * 50)
